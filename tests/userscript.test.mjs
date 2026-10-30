@@ -24,12 +24,16 @@ function harness(src = web) {
   }
   const img = new Element(); img.src = src; img.setAttribute('srcset', `${web} 2x`);
   const body = new Element();
+  const images = [img];
   const events = {}; const loads = []; const frames = [];
+  const api = {};
   let observe, mutate;
-  runInNewContext(code, {
+  runInNewContext(code.replace('  scan();\n})();', '  Object.assign(testAPI, { zip, fileURL, imageBytes, noteImages });\n  scan();\n})();'), {
     URL, console: { warn() {} },
-    location: { href: 'https://www.xiaohongshu.com/explore/test', pathname: '/explore/test' },
-    document: { body, images: [img], createElement: () => new Element(), addEventListener: (k, fn) => { events[k] = fn; } },
+    Blob, TextEncoder, TextDecoder, testAPI: api,
+    innerWidth: 1200, innerHeight: 900,
+    location: { href: 'https://www.xiaohongshu.com/explore/6adcdadf000000002c0252f4', pathname: '/explore/6adcdadf000000002c0252f4' },
+    document: { body, images, createElement: () => new Element(), addEventListener: (k, fn) => { events[k] = fn; } },
     window: { addEventListener() {} },
     IntersectionObserver: class { constructor(fn) { observe = fn; } observe() {} },
     MutationObserver: class { constructor(fn) { mutate = fn; } observe() {} },
@@ -37,7 +41,7 @@ function harness(src = web) {
     setTimeout: () => 1, clearTimeout() {}, requestAnimationFrame: fn => frames.push(fn),
   });
   const flush = () => { while (frames.length) frames.shift()(); };
-  return { img, loads, events, toggle: body.children[0].children[0],
+  return { img, images, loads, events, api, toggle: body.children[0].children[0],
     show() { observe([{ target: img, isIntersecting: true }]); },
     mutate() { mutate(); flush(); }, flush };
 }
@@ -51,6 +55,33 @@ test('preserves complete bucket path and removes srcset; toggle restores both', 
   h.toggle.onclick(); h.flush();
   assert.equal(h.img.src, web);
   assert.equal(h.img.getAttribute('srcset'), `${web} 2x`);
+});
+
+test('whole-post list includes offscreen slides, deduplicates clones, keeps carousel order', async () => {
+  const h = harness();
+  const root = { innerText: '2/2', getBoundingClientRect: () => ({ width: 800 }) };
+  h.img.closest = () => root;
+  const second = new h.img.constructor(); second.src = web.replace('1040test', '1040next'); second.closest = () => root;
+  const clone = new h.img.constructor(); clone.src = web; clone.closest = () => root;
+  h.images.push(second, clone);
+  const result = await h.api.noteImages();
+  assert.equal(result.images.length, 2);
+  assert.equal(result.images[0].url, original);
+  assert.equal(result.images[1].url, original.replace('1040test', '1040next'));
+});
+
+test('ZIP stores exact bytes and standard CRC32 with directory entries', async () => {
+  const { api } = harness();
+  const bytes = new TextEncoder().encode('123456789');
+  const archive = new Uint8Array(await api.zip([{ name: '01.jpg', bytes }]).arrayBuffer());
+  const view = new DataView(archive.buffer);
+  assert.equal(view.getUint32(0, true), 0x04034b50);
+  assert.equal(view.getUint32(14, true), 0xcbf43926);
+  assert.deepEqual(archive.slice(36, 45), bytes);
+  assert.equal(view.getUint32(45, true), 0x02014b50);
+  assert.equal(view.getUint32(archive.length - 22, true), 0x06054b50);
+  assert.equal(view.getUint16(archive.length - 14, true), 1);
+  assert.throws(() => api.fileURL('../bad'), /无效/);
 });
 
 test('preload error leaves web image intact', () => {
@@ -79,8 +110,17 @@ test('site lazy loader can be replaced again; displayed image error rolls back',
   h.mutate(); assert.equal(h.loads.length, 1);
 });
 
-test('unrelated host and ordinary bucket are ignored', () => {
-  for (const src of [web.replace('sns-webpic-qc.xhscdn.com', 'evilxhscdn.com'), web.replace('note_pre_post_uhdr', 'notes_pre_post')]) {
+test('unrelated host and avatar bucket are ignored', () => {
+  for (const src of [web.replace('sns-webpic-qc.xhscdn.com', 'evilxhscdn.com'), web.replace('note_pre_post_uhdr', 'avatar')]) {
     const h = harness(src); h.show(); assert.equal(h.loads.length, 0);
+  }
+});
+
+test('spectrum and other photo buckets preserve complete paths', () => {
+  for (const bucket of ['spectrum', 'notes_pre_post', 'note_pre_post']) {
+    const h = harness(web.replace('note_pre_post_uhdr', bucket)); h.show();
+    assert.equal(h.loads[0].src, original.replace('note_pre_post_uhdr', bucket));
+    h.loads[0].onload();
+    assert.equal(h.img.src, original.replace('note_pre_post_uhdr', bucket));
   }
 });
