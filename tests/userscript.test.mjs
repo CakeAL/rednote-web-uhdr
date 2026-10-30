@@ -23,6 +23,7 @@ function harness(src = web, initialMode = 'original') {
     append(...nodes) { this.children.push(...nodes); }
     contains(node) { return node === this || this.children.some(child => child.contains(node)); }
     closest() { return root; }
+    matches(selector) { return selector === 'img.preview-interactive' && this.className === 'preview-interactive'; }
     getBoundingClientRect() { return { width: 600, height: 400, left: 0, top: 0, right: 600, bottom: 400 }; }
   }
   const img = new Element(); img.src = src; img.setAttribute('srcset', `${web} 2x`);
@@ -31,7 +32,7 @@ function harness(src = web, initialMode = 'original') {
   const events = {}; const loads = []; const frames = [];
   const api = {};
   let observe, mutate;
-  runInNewContext(code.replace('  scan();\n})();', '  Object.assign(testAPI, { zip, fileURL, imageBytes, noteImages, quality, toggle, downloadOne, originalURL, displayURL, panel });\n  scan();\n})();'), {
+  runInNewContext(code.replace('  scan();\n})();', '  Object.assign(testAPI, { zip, fileURL, imageBytes, noteImages, quality, toggle, downloadOne, originalURL, displayURL, panel, link });\n  scan();\n})();'), {
     URL, console: { warn() {} },
     Blob, TextEncoder, TextDecoder, testAPI: api,
     innerWidth: 1200, innerHeight: 900,
@@ -47,7 +48,7 @@ function harness(src = web, initialMode = 'original') {
   });
   const flush = () => { while (frames.length) frames.shift()(); };
   return { img, images, roots, loads, events, api, toggle: api.toggle,
-    show() { observe([{ target: img, isIntersecting: true }]); },
+    show(target = img) { observe([{ target, isIntersecting: true }]); },
     mutate() { mutate([{ target: img }]); flush(); }, flush };
 }
 
@@ -162,4 +163,26 @@ test('floating toolbar hides when detail closes or is CSS-hidden, and returns wh
   assert.equal(h.api.panel.style.display, 'flex');
   root.computedStyle = { display: 'none' }; h.mutate();
   assert.equal(h.api.panel.style.display, 'none');
+});
+
+test('full-screen preview outside detail is replaced, including zoomed-out images', () => {
+  const h = harness();
+  h.img.className = 'preview-interactive'; h.img.closest = () => null;
+  h.img.getBoundingClientRect = () => ({ width: 160, height: 120, left: 0, top: 0, right: 160, bottom: 120 });
+  h.show(); h.loads[0].onload();
+  assert.equal(h.img.src, original);
+  assert.equal(h.api.link.href, original);
+  assert.equal(h.api.downloadOne.disabled, false);
+  h.img.src = web; h.mutate();
+  assert.equal(h.img.src, original);
+});
+
+test('open/download target prioritizes preview over larger underlying carousel', () => {
+  const h = harness(); h.show(); h.loads[0].onload();
+  const carousel = new h.img.constructor(); carousel.src = original.replace('1040test', '1040other');
+  // Both have previously been observed; change the active image into the preview.
+  h.images.push(carousel); h.show(carousel); h.img.className = 'preview-interactive';
+  h.img.getBoundingClientRect = () => ({ width: 160, height: 120, left: 0, top: 0, right: 160, bottom: 120 });
+  h.mutate();
+  assert.equal(h.api.link.href, original);
 });

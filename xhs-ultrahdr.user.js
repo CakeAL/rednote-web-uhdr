@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         小红书 Ultra HDR 原图
 // @namespace    local.rednote.uhdr
-// @version      0.3.1
+// @version      0.3.2
 // @description  小红书原图与 Middle 画质切换，左侧浮动下载操作，支持 HDR 与普通图片原文件。
 // @match        https://www.xiaohongshu.com/*
 // @run-at       document-idle
@@ -91,7 +91,7 @@
   let activeNoteId = noteId();
 
   function arrange() {
-    const detailOpen = Array.from(document.querySelectorAll('.note-container, .note-detail-container, .image-viewer')).some(root => {
+    const detailOpen = Array.from(document.querySelectorAll('.note-container, .note-detail-container, .image-viewer, img.preview-interactive')).some(root => {
       const r = root.getBoundingClientRect();
       const style = getComputedStyle(root);
       return style.display !== 'none' && style.visibility !== 'hidden' &&
@@ -101,12 +101,16 @@
     if (panel.style.display !== display) panel.style.display = display;
     let best = null;
     let area = 0;
+    let priority = -1;
     for (const img of document.images) {
       if (!eligible(img) || !source(img)) continue;
       const r = img.getBoundingClientRect();
       const a = Math.max(0, Math.min(r.right, innerWidth) - Math.max(r.left, 0)) *
         Math.max(0, Math.min(r.bottom, innerHeight) - Math.max(r.top, 0));
-      if (a > area) { area = a; best = img; }
+      const rank = img.matches('img.preview-interactive') ? 1 : 0;
+      if (a > 0 && (rank > priority || (rank === priority && a > area))) {
+        area = a; best = img; priority = rank;
+      }
     }
     currentImage = best;
     downloadOne.disabled = downloading || !best;
@@ -151,7 +155,10 @@
   function eligible(img) {
     if (!img.isConnected || !visible.has(img)) return false;
     const box = img.getBoundingClientRect();
-    // Leave feed thumbnails and avatars alone; support detail and enlarged views.
+    // The full-screen preview is a separate portal outside the note container.
+    // It must remain eligible even when the user zooms below thumbnail size.
+    if (img.matches('img.preview-interactive')) return box.width > 0 && box.height > 0;
+    // Leave feed thumbnails and avatars alone; support detail views.
     return box.width >= 280 && box.height >= 180 &&
       !!img.closest('.note-detail-container, .note-container, .image-viewer, [role="dialog"]');
   }
