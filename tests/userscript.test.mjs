@@ -8,7 +8,9 @@ const key = 'note_pre_post_uhdr/1040test';
 const web = `https://sns-webpic-qc.xhscdn.com/date/sign/${key}!h5_1080jpg`;
 const original = `https://ci.xiaohongshu.com/${key}`;
 
-function harness(src = web) {
+function harness(src = web, initialMode = 'original') {
+  const root = { innerText: '1/1', getBoundingClientRect: () => ({ width: 800, height: 600, left: 0, top: 0, right: 800, bottom: 600 }) };
+  const roots = [root];
   class Element {
     constructor() { this.attrs = new Map(); this.style = {}; this.children = []; this.isConnected = true; }
     getAttribute(k) { return this.attrs.get(k) ?? null; }
@@ -19,8 +21,9 @@ function harness(src = web) {
     get src() { return this.getAttribute('src'); }
     get currentSrc() { return this.src; }
     append(...nodes) { this.children.push(...nodes); }
-    closest() { return null; }
-    getBoundingClientRect() { return { width: 600, height: 400 }; }
+    contains(node) { return node === this || this.children.some(child => child.contains(node)); }
+    closest() { return root; }
+    getBoundingClientRect() { return { width: 600, height: 400, left: 0, top: 0, right: 600, bottom: 400 }; }
   }
   const img = new Element(); img.src = src; img.setAttribute('srcset', `${web} 2x`);
   const body = new Element();
@@ -28,12 +31,14 @@ function harness(src = web) {
   const events = {}; const loads = []; const frames = [];
   const api = {};
   let observe, mutate;
-  runInNewContext(code.replace('  scan();\n})();', '  Object.assign(testAPI, { zip, fileURL, imageBytes, noteImages });\n  scan();\n})();'), {
+  runInNewContext(code.replace('  scan();\n})();', '  Object.assign(testAPI, { zip, fileURL, imageBytes, noteImages, quality, toggle, downloadOne, originalURL, displayURL, panel });\n  scan();\n})();'), {
     URL, console: { warn() {} },
     Blob, TextEncoder, TextDecoder, testAPI: api,
     innerWidth: 1200, innerHeight: 900,
+    getComputedStyle: node => ({ display: 'block', visibility: 'visible', ...node.computedStyle }),
+    localStorage: { getItem: () => initialMode, setItem() {} },
     location: { href: 'https://www.xiaohongshu.com/explore/6adcdadf000000002c0252f4', pathname: '/explore/6adcdadf000000002c0252f4' },
-    document: { body, images, createElement: () => new Element(), addEventListener: (k, fn) => { events[k] = fn; } },
+    document: { body, images, querySelectorAll: () => roots, createElement: () => new Element(), addEventListener: (k, fn) => { events[k] = fn; } },
     window: { addEventListener() {} },
     IntersectionObserver: class { constructor(fn) { observe = fn; } observe() {} },
     MutationObserver: class { constructor(fn) { mutate = fn; } observe() {} },
@@ -41,9 +46,9 @@ function harness(src = web) {
     setTimeout: () => 1, clearTimeout() {}, requestAnimationFrame: fn => frames.push(fn),
   });
   const flush = () => { while (frames.length) frames.shift()(); };
-  return { img, images, loads, events, api, toggle: body.children[0].children[0],
+  return { img, images, roots, loads, events, api, toggle: api.toggle,
     show() { observe([{ target: img, isIntersecting: true }]); },
-    mutate() { mutate(); flush(); }, flush };
+    mutate() { mutate([{ target: img }]); flush(); }, flush };
 }
 
 test('preserves complete bucket path and removes srcset; toggle restores both', () => {
@@ -117,10 +122,44 @@ test('unrelated host and avatar bucket are ignored', () => {
 });
 
 test('spectrum and other photo buckets preserve complete paths', () => {
-  for (const bucket of ['spectrum', 'notes_pre_post', 'note_pre_post']) {
+  for (const bucket of ['spectrum', 'notes_pre_post', 'note_pre_post', 'notes_uhdr']) {
     const h = harness(web.replace('note_pre_post_uhdr', bucket)); h.show();
     assert.equal(h.loads[0].src, original.replace('note_pre_post_uhdr', bucket));
     h.loads[0].onload();
     assert.equal(h.img.src, original.replace('note_pre_post_uhdr', bucket));
   }
+});
+
+test('bare signed IDs support original downloads even when not UHDR', () => {
+  const src = 'https://sns-webpic-qc.xhscdn.com/202610301543/46f3885da3bd12edf1b14cccee3cb27b/1040plain!nd_dft_wlteh_webp_3';
+  const h = harness(src); h.show(); h.loads[0].onload();
+  assert.equal(h.img.src, 'https://ci.xiaohongshu.com/1040plain');
+  assert.equal(h.api.downloadOne.disabled, false);
+});
+
+test('middle mode requests bounded size, downloads retain original URLs; switching restores web mode', () => {
+  const h = harness(web, 'middle'); h.show();
+  assert.equal(h.loads[0].src, `${original}?imageMogr2/thumbnail/1440x1440>/format/jpg`);
+  h.loads[0].onload();
+  assert.equal(h.api.originalURL(h.img.src), original);
+  h.api.quality.value = 'web'; h.api.quality.onchange(); h.flush();
+  assert.equal(h.img.src, web);
+  assert.equal(h.loads.length, 1);
+  assert.equal(h.api.downloadOne.disabled, false);
+});
+
+test('feed images outside note detail are not replaced', () => {
+  const h = harness(); h.img.closest = () => null; h.show();
+  assert.equal(h.loads.length, 0);
+});
+
+test('floating toolbar hides when detail closes or is CSS-hidden, and returns when opened', () => {
+  const h = harness();
+  assert.equal(h.api.panel.style.display, 'flex');
+  const root = h.roots.pop(); h.mutate();
+  assert.equal(h.api.panel.style.display, 'none');
+  h.roots.push(root); h.mutate();
+  assert.equal(h.api.panel.style.display, 'flex');
+  root.computedStyle = { display: 'none' }; h.mutate();
+  assert.equal(h.api.panel.style.display, 'none');
 });

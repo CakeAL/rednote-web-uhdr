@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         小红书 Ultra HDR 原图
 // @namespace    local.rednote.uhdr
-// @version      0.2.2
-// @description  加载小红书 CDN 原文件，支持 spectrum 等路径；下载当前原图或整帖原图 ZIP。
+// @version      0.3.1
+// @description  小红书原图与 Middle 画质切换，左侧浮动下载操作，支持 HDR 与普通图片原文件。
 // @match        https://www.xiaohongshu.com/*
 // @run-at       document-idle
 // @grant        none
@@ -18,12 +18,27 @@
       const url = new URL(value, location.href);
       if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
       if (!(url.hostname.endsWith('.xhscdn.com') || url.hostname === 'ci.xiaohongshu.com')) return null;
-      const match = url.pathname.match(/\/((?:note_pre_post_uhdr|spectrum|notes_pre_post|note_pre_post)\/[A-Za-z0-9_-]+)(?:!.*)?$/);
-      return match ? `https://ci.xiaohongshu.com/${match[1]}` : null;
+      const parts = url.pathname.split('!')[0].split('/').filter(Boolean);
+      const id = parts.pop();
+      if (!/^1040[A-Za-z0-9_-]+$/.test(id || '')) return null;
+      const bucket = parts.at(-1);
+      const known = ['notes_uhdr', 'note_pre_post_uhdr', 'spectrum', 'notes_pre_post', 'note_pre_post'];
+      if (known.includes(bucket)) return `https://ci.xiaohongshu.com/${bucket}/${id}`;
+      // Bare IDs occur either at the root or after the web CDN's date/signature.
+      if (!parts.length || (parts.length === 2 && /^\d{12}$/.test(parts[0]) && /^[a-f0-9]{32}$/i.test(parts[1]))) {
+        return `https://ci.xiaohongshu.com/${id}`;
+      }
+      return null;
     } catch { return null; }
   }
 
   let enabled = true;
+  let mode = 'middle';
+  try { mode = localStorage.getItem('xhs-original-quality') || 'middle'; } catch {}
+  if (!['middle', 'original', 'web'].includes(mode)) mode = 'middle';
+  function displayURL(url) {
+    return mode === 'middle' ? `${url}?imageMogr2/thumbnail/1440x1440>/format/jpg` : url;
+  }
   let running = 0;
   let scheduled = false;
   const records = new Map();
@@ -31,7 +46,7 @@
   const visible = new WeakSet();
   const watched = new WeakSet();
   const panel = document.createElement('div');
-  panel.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;gap:10px;align-items:center;padding:10px 14px;background:#202124;color:white;border-radius:12px;font:13px system-ui;box-shadow:0 2px 12px #0004';
+  panel.style.cssText = 'position:fixed;top:50%;left:12px;transform:translateY(-50%);z-index:2147483647;display:none;flex-direction:column;gap:12px;align-items:stretch;max-width:190px;max-height:85vh;overflow:auto;padding:14px;background:#202124ed;color:white;border-radius:12px;font:13px system-ui;box-shadow:0 2px 12px #0004';
   const toggle = document.createElement('button');
   toggle.type = 'button';
   toggle.style.cssText = 'background:transparent;color:inherit;border:0;cursor:pointer;font:inherit';
@@ -41,23 +56,49 @@
   link.target = '_blank';
   link.rel = 'noopener noreferrer';
   link.style.cssText = 'color:#a8d8ff;display:none';
-  panel.append(toggle, link);
   document.body.append(panel);
   const downloadAll = document.createElement('button');
   downloadAll.type = 'button';
   downloadAll.textContent = '下载本帖全部原图 ZIP';
   downloadAll.style.cssText = toggle.style.cssText;
   const progress = document.createElement('span');
-  panel.append(downloadAll, progress);
   const downloadOne = document.createElement('button');
   downloadOne.type = 'button';
   downloadOne.textContent = '下载原图';
-  downloadOne.style.cssText = 'position:fixed;z-index:2147483647;display:none;padding:8px 12px;border:1px solid #fff6;border-radius:8px;background:#202124df;color:white;font:13px system-ui;cursor:pointer';
-  document.body.append(downloadOne);
+  downloadOne.style.cssText = toggle.style.cssText;
+  const settings = document.createElement('details');
+  const summary = document.createElement('summary');
+  summary.textContent = '设置';
+  const qualityLabel = document.createElement('label');
+  qualityLabel.textContent = '浏览画质';
+  const quality = document.createElement('select');
+  quality.style.cssText = 'display:block;width:100%;margin:10px 0;padding:5px;background:#303134;color:white;border:1px solid #777;border-radius:5px;font:inherit';
+  quality.setAttribute('aria-label', '浏览画质');
+  for (const [value, text] of [['middle', 'Middle 1440（SDR、省流）'], ['original', '原图（保留源文件 HDR）'], ['web', '网页默认（省流）']]) {
+    const option = document.createElement('option');
+    option.value = value; option.textContent = text; quality.append(option);
+  }
+  quality.value = mode;
+  const hint = document.createElement('div');
+  hint.style.cssText = 'font-size:12px;line-height:1.6;color:#bdc1c6';
+  hint.textContent = 'Middle 最长边 1440，实测会移除增益图。下载始终保存原文件。';
+  qualityLabel.append(quality);
+  settings.append(summary, qualityLabel, hint);
+  // Keep all actions anchored to the screen, independent of image/slide position.
+  panel.append(link, downloadAll, downloadOne, toggle, settings, progress);
   let currentImage = null;
   let downloading = false;
+  let activeNoteId = noteId();
 
   function arrange() {
+    const detailOpen = Array.from(document.querySelectorAll('.note-container, .note-detail-container, .image-viewer')).some(root => {
+      const r = root.getBoundingClientRect();
+      const style = getComputedStyle(root);
+      return style.display !== 'none' && style.visibility !== 'hidden' &&
+        r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
+    });
+    const display = detailOpen ? 'flex' : 'none';
+    if (panel.style.display !== display) panel.style.display = display;
     let best = null;
     let area = 0;
     for (const img of document.images) {
@@ -68,12 +109,9 @@
       if (a > area) { area = a; best = img; }
     }
     currentImage = best;
-    downloadOne.style.display = best ? '' : 'none';
+    downloadOne.disabled = downloading || !best;
     link.style.display = best ? '' : 'none';
     if (best) {
-      const r = best.getBoundingClientRect();
-      downloadOne.style.left = `${Math.max(8, Math.min(r.right - 100, innerWidth - 108))}px`;
-      downloadOne.style.top = `${Math.max(8, Math.min(r.top + 12, innerHeight - 56))}px`;
       link.href = source(best);
     }
   }
@@ -84,7 +122,8 @@
       if (!img.isConnected || source(img) !== record.url) records.delete(img);
       else if (record.status === 'done') count++;
     }
-    const text = enabled ? `原图：已替换 ${count} 张` : '原图：已关闭';
+    const name = mode === 'middle' ? 'Middle · SDR' : mode === 'original' ? '原图' : '网页默认';
+    const text = enabled ? `${name}：已替换 ${count} 张` : '自动替换：已关闭';
     if (toggle.textContent !== text) toggle.textContent = text;
     arrange();
   }
@@ -114,8 +153,7 @@
     const box = img.getBoundingClientRect();
     // Leave feed thumbnails and avatars alone; support detail and enlarged views.
     return box.width >= 280 && box.height >= 180 &&
-      (/^\/(explore|discovery\/item)\//.test(location.pathname) ||
-        !!img.closest('.note-detail-mask, .note-detail-container, .note-container, .image-viewer, [role="dialog"]'));
+      !!img.closest('.note-detail-container, .note-container, .image-viewer, [role="dialog"]');
   }
 
   function drain() {
@@ -142,7 +180,7 @@
             record.status = 'done';
             for (const { node } of record.saved) node.removeAttribute('srcset');
             img.referrerPolicy = 'no-referrer';
-            img.src = record.url;
+            img.src = record.displayURL;
             link.href = record.url;
             link.style.display = '';
           } else if (!ok) {
@@ -155,25 +193,25 @@
       }
       probe.onload = () => finish(probe.naturalWidth > 0);
       probe.onerror = () => finish(false);
-      probe.src = record.url;
+      probe.src = record.displayURL;
     }
   }
 
   function consider(img) {
-    if (!enabled || !eligible(img)) return;
+    if (!enabled || mode === 'web' || !eligible(img)) return;
     const url = source(img);
     if (!url) return;
     const previous = records.get(img);
     if (previous?.url === url) {
       // Vue/lazy loading can put the processed URL back after our replacement.
-      if (previous.status === 'done' && (img.getAttribute('src') !== url || img.hasAttribute('srcset'))) {
-        if (img.getAttribute('src') !== url) previous.saved = save(img);
+      if (previous.status === 'done' && (img.getAttribute('src') !== previous.displayURL || img.hasAttribute('srcset'))) {
+        if (img.getAttribute('src') !== previous.displayURL) previous.saved = save(img);
         for (const { node } of previous.saved) node.removeAttribute('srcset');
-        img.src = url;
+        img.src = previous.displayURL;
       }
       return;
     }
-    const record = { url, status: 'pending' };
+    const record = { url, displayURL: displayURL(url), status: 'pending' };
     records.set(img, record);
     pending.push({ img, record });
     drain();
@@ -188,6 +226,11 @@
 
   function scan() {
     scheduled = false;
+    const id = noteId();
+    if (id !== activeNoteId) {
+      activeNoteId = id;
+      if (!downloading) progress.textContent = '';
+    }
     for (const img of document.images) {
       if (!watched.has(img)) { watched.add(img); intersection.observe(img); }
       consider(img);
@@ -207,6 +250,15 @@
     }
     records.clear();
     pending.length = 0;
+    schedule();
+  };
+  quality.onchange = () => {
+    for (const [img, record] of records) {
+      if (record.status === 'done' && source(img) === record.url) restore(record);
+    }
+    mode = quality.value;
+    try { localStorage.setItem('xhs-original-quality', mode); } catch {}
+    records.clear(); pending.length = 0;
     schedule();
   };
 
@@ -352,14 +404,17 @@
   });
   document.addEventListener('error', event => {
     const record = records.get(event.target);
-    if (record?.status === 'done' && event.target.getAttribute('src') === record.url) {
+    if (record?.status === 'done' && event.target.getAttribute('src') === record.displayURL) {
       record.status = 'failed';
       restore(record);
       update();
     }
   }, true);
-  new MutationObserver(schedule).observe(document.body, {
-    subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset', 'class'],
+  new MutationObserver(changes => {
+    // Our own layout/status updates must not trigger an observer loop.
+    if (changes.some(change => !panel.contains(change.target))) schedule();
+  }).observe(document.body, {
+    subtree: true, childList: true, attributes: true, attributeFilter: ['src', 'srcset', 'class', 'style', 'hidden'],
   });
   window.addEventListener('resize', schedule);
   window.addEventListener('scroll', arrange, true);
