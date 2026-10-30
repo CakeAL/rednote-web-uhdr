@@ -1,8 +1,10 @@
-# 小红书网页原图与画质设置
+# 小红书 Ultra HDR 原图
 
-油猴脚本 `xhs-ultrahdr.user.js`，版本 0.3.2。测试日期：2026-10-30。
+小红书原图与 Middle 画质切换，左侧浮动下载操作，支持 HDR 与普通图片原文件。
 
-在 Tampermonkey 中新建脚本，用该文件的全部内容替换模板并保存，刷新笔记页即可。已在用户 Edge 的 Tampermonkey 中更新并测试。
+用于直接在网页端直接显示图片（HDR）原图，并提供下载当前帖子全部原图/下载单张操作。
+
+安装：https://greasyfork.org/zh-CN/scripts/602955-%E5%B0%8F%E7%BA%A2%E4%B9%A6-ultra-hdr-%E5%8E%9F%E5%9B%BE
 
 ## 操作
 
@@ -29,27 +31,3 @@
 
 原图 CDN 使用完整对象路径。没有目录的 ID 保持无目录形式，不能随意加减目录。加载失败时保留网页版本。自动替换并发最多两张。
 
-## 分辨率测试
-
-测试包括三类 HDR 目录及一张无目录的普通图片。新测试的竖图：
-
-| 版本 | 尺寸 | 字节数 | 增益图标记 |
-| --- | --- | ---: | --- |
-| 原文件 | 3072 × 4096 | 4956741 | 有 |
-| `!middle` 样式 | 3072 × 4096 | 4956795 | 有，但没有缩小 |
-| Middle 1440 | 1080 × 1440 | 259129 | 无 |
-
-公开的 `hdr/1` 处理参数在本次小红书 CDN 实测中未保留增益图，因此未将它包装为可用的「Middle HDR」。用户提供的 App 保存样本已确认是 1440 × 1080、1421736 字节的真实 UHDR JPEG，包含 Adobe/ISO 增益图及 MPF。同一对象 CDN 原文件为 8592336 字节。样本没有记录网络请求地址，尚不能区分服务器派生版本与 App 保存时重新编码；本次公开 CDN 参数测试仍未找到可供网页可靠使用的中等尺寸 HDR 地址。
-
-记录见 `research/resolution-probe.json`、`research/middle-hdr-probe.json`、`research/mobile-sample-analysis.json` 及 `research/mobile-hdr-followup.json`。文档不记录示例帖子或图片链接。
-
-## 验证与限制
-
-- Edge 已验证新目录图片在 Middle 和原图模式下均能替换；刷新后保留 Middle 设置。无目录的普通图片对象已验证可请求，且下载入口不依赖是否含 HDR。
-- 早期两篇笔记已验证原文件含增益图；Edge 完成单张及 18 张整帖 ZIP 下载，ZIP 校验通过，单张下载与 ZIP 内对应文件字节一致。记录见 `research/edge-download-verification.json`。
-- 状态「已替换」表示浏览文件已加载，不证明实际 HDR 输出。显示效果取决于源格式、浏览器、系统和屏幕。
-- 站点 DOM、CDN 路径或访问策略变更仍可能影响其他笔记。脚本不调用 App 私有接口。
-- 原文件及整帖 ZIP 会使用较多流量和内存。
-- 脚本不读取 Cookie，不调用第三方下载服务，无 GM 跨域请求权限。必要时读取同源分享页的图片列表。
-
-运行检查：`node --check xhs-ultrahdr.user.js` 和 `node --test tests/userscript.test.mjs`。

@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         小红书 Ultra HDR 原图
-// @namespace    local.rednote.uhdr
-// @version      0.3.2
-// @description  小红书原图与 Middle 画质切换，左侧浮动下载操作，支持 HDR 与普通图片原文件。
+// @namespace    https://github.com/CakeAL/rednote-web-uhdr
+// @version      0.3.3
+// @description  小红书原图与 Middle 画质切换，左侧浮动下载操作，支持 HDR 与普通图片原文件。用于直接在网页端直接显示图片（HDR）原图，并提供下载当前帖子全部原图/下载单张操作。
 // @match        https://www.xiaohongshu.com/*
 // @run-at       document-idle
 // @grant        none
